@@ -216,11 +216,42 @@ function tagadelic_get_weighted_tags($vids, $steps = 6, $size = 60) {
       return array();
     }
 
-    $result = db_query_range('SELECT COUNT(*) AS count, td.tid, td.vid, td.name, td.description FROM {taxonomy_term_data} td INNER JOIN {taxonomy_index} tn ON td.tid = tn.tid INNER JOIN {node} n ON tn.nid = n.nid WHERE td.vid IN (' . implode(',', array_fill(0, count($vids), '?')) . ') GROUP BY td.tid, td.vid, td.name, td.description HAVING COUNT(*) > 0 ORDER BY count DESC', 0, $size, $vids);
-
-    foreach ($result as $tag) {
-      $tags[$tag->tid] = $tag;
+    // Start SQL statement
+    $query = db_select('taxonomy_term_data', 'td');
+    $query->addExpression('COUNT(*)', 'count');
+    $query->fields('td')
+        ->range(0, $size)
+        ->groupBy('tid')
+        ->orderBy('count', 'DESC');
+    $constraint = db_or();
+    // Find the names of all vocabularies
+    $voc_names = array();
+    foreach (taxonomy_vocabulary_get_names() as $name => $voc) {
+      if (in_array($voc->vid, $vids)) {
+        $voc_names[] = $name;
+      }
     }
+    // Find all fields for given vocabularies and append constraints to the query
+    $i = 0;
+    foreach (field_read_fields(array('type' => 'taxonomy_term_reference')) as $key => $field) {
+      foreach ($field['settings']['allowed_values'] as $voc) {
+        if (in_array($voc['vocabulary'], $voc_names)) {
+          // Check if the table has at least one record
+          if (db_select('field_data_' . $key, 'fd')->countQuery()->execute()->fetchField() > 0) {
+            $i++;
+            $tkey = 'a' . $i;
+            $query->join('field_data_' . $key, $tkey);
+            $constraint->where('td.tid = ' . $tkey . '.' . $key . '_tid');
+          }
+        }
+      }
+    }
+    // Complete the query and execute
+    $query->condition('td.vid', $vids);
+    if (count($constraint) > 0) {
+      $query->condition($constraint);
+    }
+    $tags = $query->execute()->fetchAllAssoc('tid', PDO::FETCH_OBJ);
 
     $tags = tagadelic_build_weighted_tags($tags, $steps);
 
