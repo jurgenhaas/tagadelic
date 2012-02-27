@@ -216,42 +216,7 @@ function tagadelic_get_weighted_tags($vids, $steps = 6, $size = 60) {
       return array();
     }
 
-    // Start SQL statement
-    $query = db_select('taxonomy_term_data', 'td');
-    $query->addExpression('COUNT(*)', 'count');
-    $query->fields('td')
-        ->range(0, $size)
-        ->groupBy('tid')
-        ->orderBy('count', 'DESC');
-    $constraint = db_or();
-    // Find the names of all vocabularies
-    $voc_names = array();
-    foreach (taxonomy_vocabulary_get_names() as $name => $voc) {
-      if (in_array($voc->vid, $vids)) {
-        $voc_names[] = $name;
-      }
-    }
-    // Find all fields for given vocabularies and append constraints to the query
-    $i = 0;
-    foreach (field_read_fields(array('type' => 'taxonomy_term_reference')) as $key => $field) {
-      foreach ($field['settings']['allowed_values'] as $voc) {
-        if (in_array($voc['vocabulary'], $voc_names)) {
-          // Check if the table has at least one record
-          if (db_select('field_data_' . $key, 'fd')->countQuery()->execute()->fetchField() > 0) {
-            $i++;
-            $tkey = 'a' . $i;
-            $query->join('field_data_' . $key, $tkey);
-            $constraint->where('td.tid = ' . $tkey . '.' . $key . '_tid');
-          }
-        }
-      }
-    }
-    // Complete the query and execute
-    $query->condition('td.vid', $vids);
-    if (count($constraint) > 0) {
-      $query->condition($constraint);
-    }
-    $tags = $query->execute()->fetchAllAssoc('tid', PDO::FETCH_OBJ);
+    $tags = _tagadelic_query_weighted_tags($vids, $size);
 
     $tags = tagadelic_build_weighted_tags($tags, $steps);
 
@@ -341,6 +306,69 @@ function _tagadelic_sort_by_weight($a, $b) {
     return $a->count > $b->count;
   }
   return $a->weight > $b->weight;
+}
+
+/**
+ * Function that queries all taxonomy fields to find out which terms have been
+ * used by how many entities. Called by tagadelic_get_weighted_tags().
+ *
+ * @param array $vids
+ *  An array with ids of all the vocabularies that should be included in the search
+ * @param int $size
+ *  The maximum number of terms being returned by the search
+ * @return array of terms
+ */
+function _tagadelic_query_weighted_tags($vids, $size) {
+  $voc_names = _tagadelic_get_voc_names($vids);
+  // Start SQL statement
+  $query = db_select('taxonomy_term_data', 'td');
+  $query->addExpression('COUNT(*)', 'count');
+  $query->fields('td')
+      ->range(0, $size)
+      ->groupBy('tid')
+      ->orderBy('count', 'DESC');
+  $constraint = db_or();
+  // Find all fields for given vocabularies and append constraints to the query
+  $i = 0;
+  foreach (field_read_fields(array('type' => 'taxonomy_term_reference')) as $key => $field) {
+    $key = check_plain($key);
+    foreach ($field['settings']['allowed_values'] as $voc) {
+      if (in_array($voc['vocabulary'], $voc_names)) {
+        // Check if the table has at least one record
+        if (db_select('field_data_' . $key, 'fd')->countQuery()->execute()->fetchField() > 0) {
+          $i++;
+          $tkey = 'a' . $i;
+          $query->join('field_data_' . $key, $tkey);
+          $constraint->where('td.tid = ' . $tkey . '.' . $key . '_tid');
+        }
+      }
+    }
+  }
+  // Complete the query and execute
+  $query->condition('td.vid', $vids);
+  if (count($constraint) > 0) {
+    $query->condition($constraint);
+  }
+  return $query->execute()->fetchAllAssoc('tid', PDO::FETCH_OBJ);
+}
+
+/**
+ * Function to determine machine readable names for vocabularies provided in
+ * an array of vids.
+ *
+ * @param array $vids
+ *  An array with ids of all the vocabularies for which you want to receive the machine names for
+ * @return array of machine names
+ */
+function _tagadelic_get_voc_names($vids) {
+  // Find the names of all vocabularies
+  $voc_names = array();
+  foreach (taxonomy_vocabulary_get_names() as $name => $voc) {
+    if (in_array($voc->vid, $vids)) {
+      $voc_names[] = $name;
+    }
+  }
+  return $voc_names;
 }
 
 /**
